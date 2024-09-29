@@ -1,0 +1,7 @@
+services:
+  rust:
+    image: rust:latest
+    volumes:
+      - .:/usr/src/app
+    working_dir: /usr/src/app
+    tty: true
