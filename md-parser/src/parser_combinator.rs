@@ -125,13 +125,14 @@ pub fn regex<'a, T>(pattern: &'a Regex, f: impl Fn(&str) -> Option<T> + 'a) -> i
             .and_then(|m| f(m.as_str()).map(|t| (t, &input[m.end()..])))
     }
 }
+
 #[macro_export]
 macro_rules! regex {
     ($pattern:expr, $f:expr) => {{
         use once_cell::sync::Lazy;
         use regex::Regex;
         static RE: Lazy<Regex> = Lazy::new(|| Regex::new($pattern).unwrap());
-        regex(&RE, $f)
+        $crate::parser_combinator::regex(&RE, $f)
     }};
 }
 
