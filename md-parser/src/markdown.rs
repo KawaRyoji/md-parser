@@ -1,6 +1,5 @@
-use std::vec;
-
 use crate::parser_combinator::*;
+use std::vec;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum MDContent {
@@ -19,16 +18,16 @@ pub enum MDContent {
     Emphasis(String),
     Strong(String),
     Strikethrough(String),
-    UnorderedList(Vec<String>),
-    OrderedList(Vec<String>),
+    UnorderedList(Vec<(u8, String)>),
+    OrderedList(Vec<(u8, String)>),
     Link(String, String),
     Image(String, String),
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Token {
-    children: Vec<Token>,
     md_type: MDContent,
+    children: Vec<Token>,
 }
 
 pub fn parse(s: &str) -> Token {
@@ -36,6 +35,7 @@ pub fn parse(s: &str) -> Token {
         let parser = header
             .or(blockquote)
             .or(emphasis)
+            .or(strong)
             .or(paragraph)
             .or(line_break);
         let mut tokens = vec![];
@@ -87,15 +87,78 @@ pub fn get_inner_text(md_type: &MDContent) -> Option<&str> {
     }
 }
 
-pub fn get_inner_list(token: &Token) -> Option<Vec<&str>> {
+pub fn get_inner_list(token: &Token) -> Option<Vec<(u8, &str)>> {
     match &token.md_type {
-        MDContent::UnorderedList(items) => Some(items.iter().map(|item| item.as_str()).collect()),
-        MDContent::OrderedList(items) => Some(items.iter().map(|item| item.as_str()).collect()),
+        MDContent::UnorderedList(items) => {
+            Some(items.iter().map(|item| (item.0, item.1.as_str())).collect())
+        }
+        MDContent::OrderedList(items) => {
+            Some(items.iter().map(|item| (item.0, item.1.as_str())).collect())
+        }
         _ => None,
     }
 }
 
-pub fn render(markdown: MDContent) -> String {
+pub fn render(token: &Token) -> String {
+    if token.children.is_empty() {
+        return render_content(&token.md_type);
+    }
+
+    let render_children = token
+        .children
+        .iter()
+        .map(|child| render(child))
+        .collect::<Vec<String>>()
+        .join("");
+
+    render_string_content(&token.md_type, render_children.as_str())
+        .unwrap_or(render_content(&token.md_type))
+}
+
+pub fn render_string_content(markdown: &MDContent, content: &str) -> Option<String> {
+    match markdown {
+        MDContent::Root => Some(format!("<div>{}</div>", content)),
+        MDContent::LineBreak => Some("".to_string()),
+        MDContent::HorizontalRule => Some("<hr>".to_string()),
+        MDContent::Header1(_) => Some(format!("<h1>{}</h1>", content)),
+        MDContent::Header2(_) => Some(format!("<h2>{}</h2>", content)),
+        MDContent::Header3(_) => Some(format!("<h3>{}</h3>", content)),
+        MDContent::Header4(_) => Some(format!("<h4>{}</h4>", content)),
+        MDContent::Header5(_) => Some(format!("<h5>{}</h5>", content)),
+        MDContent::Header6(_) => Some(format!("<h6>{}</h6>", content)),
+        MDContent::Paragraph(_) => Some(format!("<p>{}</p>", content)),
+        MDContent::Blockquote(_) => Some(format!("<blockquote>{}</blockquote>", content)),
+        MDContent::CodeBlock(_) => Some(format!("<pre><code>{}</code></pre>", content)),
+        MDContent::Emphasis(_) => Some(format!("<em>{}</em>", content)),
+        MDContent::Strong(_) => Some(format!("<strong>{}</strong>", content)),
+        MDContent::Strikethrough(_) => Some(format!("<del>{}</del>", content)),
+        _ => None,
+    }
+}
+
+pub fn render_list_content(markdown: &MDContent, contents: Vec<String>) -> Option<String> {
+    match markdown {
+        MDContent::UnorderedList(_) => {
+            let items = contents
+                .into_iter()
+                .map(|item| format!("<li>{}</li>", item))
+                .collect::<Vec<String>>()
+                .join("");
+            Some(format!("<ul>{}</ul>", items))
+        }
+        MDContent::OrderedList(_) => {
+            let items = contents
+                .into_iter()
+                .map(|item| format!("<li>{}</li>", item))
+                .collect::<Vec<String>>()
+                .join("");
+            Some(format!("<ol>{}</ol>", items))
+        }
+        _ => None,
+    }
+}
+
+pub fn render_content(markdown: &MDContent) -> String {
     match markdown {
         MDContent::Root => "".to_string(),
         MDContent::LineBreak => "".to_string(),
@@ -111,7 +174,7 @@ pub fn render(markdown: MDContent) -> String {
         MDContent::UnorderedList(items) => {
             let items = items
                 .into_iter()
-                .map(|item| format!("<li>{}</li>", item))
+                .map(|item| format!("<li>{}</li>", item.1))
                 .collect::<Vec<String>>()
                 .join("");
             format!("<ul>{}</ul>", items)
@@ -119,7 +182,7 @@ pub fn render(markdown: MDContent) -> String {
         MDContent::OrderedList(items) => {
             let items = items
                 .into_iter()
-                .map(|item| format!("<li>{}</li>", item))
+                .map(|item| format!("<li>{}</li>", item.1))
                 .collect::<Vec<String>>()
                 .join("");
             format!("<ol>{}</ol>", items)
@@ -211,10 +274,23 @@ fn blockquote(s: &str) -> Option<(MDContent, &str)> {
 }
 
 fn emphasis(s: &str) -> Option<(MDContent, &str)> {
-    character('*')
+    let asterisk = character('*')
         .and(many(markdown_character))
-        .and(character('*'))(s)
-    .map(|(((_, text), _), rest)| (MDContent::Emphasis(text.into_iter().collect()), rest))
+        .and(character('*'));
+    let underscore = character('_')
+        .and(many(markdown_character))
+        .and(character('_'));
+
+    asterisk.or(underscore)(s)
+        .map(|(((_, text), _), rest)| (MDContent::Emphasis(text.into_iter().collect()), rest))
+}
+
+fn strong(s: &str) -> Option<(MDContent, &str)> {
+    let asterisk = string("**").and(many(markdown_character)).and(string("**"));
+    let underscore = string("__").and(many(markdown_character)).and(string("__"));
+
+    asterisk.or(underscore)(s)
+        .map(|(((_, text), _), rest)| (MDContent::Strong(text.into_iter().collect()), rest))
 }
 
 #[cfg(test)]
@@ -282,6 +358,22 @@ mod test {
             emphasis("*hello, world!*"),
             Some((MDContent::Emphasis("hello, world!".to_string()), ""))
         );
+        assert_eq!(
+            emphasis("_hello, world_"),
+            Some((MDContent::Emphasis("hello, world".to_string()), ""))
+        );
+    }
+
+    #[test]
+    fn test_strong() {
+        assert_eq!(
+            strong("**hello, world!**"),
+            Some((MDContent::Strong("hello, world!".to_string()), ""))
+        );
+        assert_eq!(
+            strong("__hello, world__"),
+            Some((MDContent::Strong("hello, world".to_string()), ""))
+        );
     }
 
     #[test]
@@ -344,11 +436,34 @@ mod test {
     }
 
     #[test]
+    fn test_render() {
+        let root = Token {
+            md_type: MDContent::Root,
+            children: vec![
+                Token {
+                    md_type: MDContent::Header1("*Hello, world!*".to_string()),
+                    children: vec![Token {
+                        md_type: MDContent::Emphasis("Hello, world!".to_string()),
+                        children: vec![],
+                    }],
+                },
+                Token {
+                    md_type: MDContent::Header2("Hello, world!".to_string()),
+                    children: vec![],
+                },
+            ],
+        };
+        let expected = "<div><h1><em>Hello, world!</em></h1><h2>Hello, world!</h2></div>";
+
+        assert_eq!(render(&root), expected);
+    }
+
+    #[test]
     fn test_render_header1() {
         let markdown = MDContent::Header1("Hello, world!".to_string());
         let expected = "<h1>Hello, world!</h1>";
 
-        assert_eq!(render(markdown), expected);
+        assert_eq!(render_content(&markdown), expected);
     }
 
     #[test]
@@ -356,7 +471,7 @@ mod test {
         let markdown = MDContent::Header2("Hello, world!".to_string());
         let expected = "<h2>Hello, world!</h2>";
 
-        assert_eq!(render(markdown), expected);
+        assert_eq!(render_content(&markdown), expected);
     }
 
     #[test]
@@ -364,7 +479,7 @@ mod test {
         let markdown = MDContent::Header3("Hello, world!".to_string());
         let expected = "<h3>Hello, world!</h3>";
 
-        assert_eq!(render(markdown), expected);
+        assert_eq!(render_content(&markdown), expected);
     }
 
     #[test]
@@ -372,7 +487,7 @@ mod test {
         let markdown = MDContent::Header4("Hello, world!".to_string());
         let expected = "<h4>Hello, world!</h4>";
 
-        assert_eq!(render(markdown), expected);
+        assert_eq!(render_content(&markdown), expected);
     }
 
     #[test]
@@ -380,7 +495,7 @@ mod test {
         let markdown = MDContent::Header5("Hello, world!".to_string());
         let expected = "<h5>Hello, world!</h5>";
 
-        assert_eq!(render(markdown), expected);
+        assert_eq!(render_content(&markdown), expected);
     }
 
     #[test]
@@ -388,7 +503,7 @@ mod test {
         let markdown = MDContent::Header6("Hello, world!".to_string());
         let expected = "<h6>Hello, world!</h6>";
 
-        assert_eq!(render(markdown), expected);
+        assert_eq!(render_content(&markdown), expected);
     }
 
     #[test]
@@ -396,7 +511,7 @@ mod test {
         let markdown = MDContent::Paragraph("Hello, world!".to_string());
         let expected = "<p>Hello, world!</p>";
 
-        assert_eq!(render(markdown), expected);
+        assert_eq!(render_content(&markdown), expected);
     }
 
     #[test]
@@ -404,7 +519,7 @@ mod test {
         let markdown = MDContent::Blockquote("Hello, world!".to_string());
         let expected = "<blockquote>Hello, world!</blockquote>";
 
-        assert_eq!(render(markdown), expected);
+        assert_eq!(render_content(&markdown), expected);
     }
 
     #[test]
@@ -412,23 +527,25 @@ mod test {
         let markdown = MDContent::CodeBlock("Hello, world!".to_string());
         let expected = "<pre><code>Hello, world!</code></pre>";
 
-        assert_eq!(render(markdown), expected);
+        assert_eq!(render_content(&markdown), expected);
     }
 
     #[test]
     fn test_render_unordered_list() {
-        let markdown = MDContent::UnorderedList(vec!["Hello".to_string(), "World".to_string()]);
+        let markdown =
+            MDContent::UnorderedList(vec![(0, "Hello".to_string()), (0, "World".to_string())]);
         let expected = "<ul><li>Hello</li><li>World</li></ul>";
 
-        assert_eq!(render(markdown), expected);
+        assert_eq!(render_content(&markdown), expected);
     }
 
     #[test]
     fn test_render_ordered_list() {
-        let markdown = MDContent::OrderedList(vec!["Hello".to_string(), "World".to_string()]);
+        let markdown =
+            MDContent::OrderedList(vec![(0, "Hello".to_string()), (0, "World".to_string())]);
         let expected = "<ol><li>Hello</li><li>World</li></ol>";
 
-        assert_eq!(render(markdown), expected);
+        assert_eq!(render_content(&markdown), expected);
     }
 
     #[test]
@@ -436,7 +553,7 @@ mod test {
         let markdown = MDContent::HorizontalRule;
         let expected = "<hr>";
 
-        assert_eq!(render(markdown), expected);
+        assert_eq!(render_content(&markdown), expected);
     }
 
     #[test]
@@ -444,7 +561,7 @@ mod test {
         let markdown = MDContent::Link("Hello".to_string(), "https://example.com".to_string());
         let expected = "<a href=\"https://example.com\">Hello</a>";
 
-        assert_eq!(render(markdown), expected);
+        assert_eq!(render_content(&markdown), expected);
     }
 
     #[test]
@@ -455,7 +572,7 @@ mod test {
         );
         let expected = "<img src=\"https://example.com/image.png\" alt=\"Hello\">";
 
-        assert_eq!(render(markdown), expected);
+        assert_eq!(render_content(&markdown), expected);
     }
 
     #[test]
@@ -463,7 +580,7 @@ mod test {
         let markdown = MDContent::Emphasis("Hello".to_string());
         let expected = "<em>Hello</em>";
 
-        assert_eq!(render(markdown), expected);
+        assert_eq!(render_content(&markdown), expected);
     }
 
     #[test]
@@ -471,7 +588,7 @@ mod test {
         let markdown = MDContent::Strong("Hello".to_string());
         let expected = "<strong>Hello</strong>";
 
-        assert_eq!(render(markdown), expected);
+        assert_eq!(render_content(&markdown), expected);
     }
 
     #[test]
@@ -479,6 +596,6 @@ mod test {
         let markdown = MDContent::Strikethrough("Hello".to_string());
         let expected = "<del>Hello</del>";
 
-        assert_eq!(render(markdown), expected);
+        assert_eq!(render_content(&markdown), expected);
     }
 }
